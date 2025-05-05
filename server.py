@@ -82,10 +82,20 @@ async def handler(websocket):
 
         async for raw_message in websocket:
             try:
-                # print(raw_message)
                 message = json.loads(raw_message)
                 type = message.get("type")
-                # print(type)
+                
+                print(f"Message: {message} | Type: {type}")
+                if type == "ping":
+                    username = message.get("username", "Unknown")
+                    print(f"Ping received from {username}")
+                    await websocket.send(json.dumps({
+                        "type": "pong",
+                        "username": username
+                    }))
+                    print(f"Pong sent to {username}")
+                    continue
+
                 if type == "switch_chatroom":
                     new_chatroom = message.get("chatroom")
                     if not new_chatroom:
