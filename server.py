@@ -262,7 +262,7 @@ async def send_to_dm_channel(dm_channel, message):
 
 async def main():
     try:
-        async with websockets.serve(handler, "0.0.0.0", 8000):
+        async with websockets.serve(handler, "0.0.0.0", 8765):
             print("WebSocket Server is running on ws://0.0.0.0:8765")
             await asyncio.Future()
     except KeyboardInterrupt:
