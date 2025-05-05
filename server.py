@@ -3,6 +3,8 @@ import websockets
 import json
 import os
 from datetime import datetime
+import firebase_admin
+from firebase_admin import credentials, firestore
 
 clients = {}
 chatrooms = {"general": set()}  # Dictionary to store chatrooms and their clients
@@ -13,32 +15,43 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 LOG_DIR = "logs"
 os.makedirs(LOG_DIR, exist_ok=True)
 
+# Initialize Firebase Admin SDK
+cred_path = os.getenv("FIREBASE_ADMIN_CREDS_PATH")
+if not cred_path:
+    raise EnvironmentError("FIREBASE_ADMIN_CREDS_PATH environment variable is not set.")
+cred = credentials.Certificate(cred_path)
+firebase_admin.initialize_app(cred)
+db = firestore.client()
+print("Firebase Admin SDK initialized. Path: ", cred_path)
+
 # Delete all log files on startup
 for log_file in os.listdir(LOG_DIR):
     log_file_path = os.path.join(LOG_DIR, log_file)
     if os.path.isfile(log_file_path):
         os.remove(log_file_path)
-print("All log files deleted on startup.")
+# print("All log files deleted on startup.") # No longer used
 
 chatroom_logs = {}  # Dictionary to store logs for each chatroom
 
-def save_logs():
-    for chatroom, messages in chatroom_logs.items():
-        log_file_path = os.path.join(LOG_DIR, f"{chatroom}.log")
-        with open(log_file_path, "w") as log_file: # overwrite the history
-            log_file.write("\n".join(messages) + "\n")
-    print("Logs saved.")
-
 async def send_chatroom_history(websocket, chatroom):
-    """Send the chatroom's message history to the user."""
-    if chatroom in chatroom_logs:
-        history = chatroom_logs[chatroom]
+    """Send the chatroom's message history to the user from Firestore."""
+    try:
+        chatroom_ref = db.collection("chatrooms").document(chatroom)
+        chatroom_doc = chatroom_ref.get()
+
+        if chatroom_doc.exists:
+            history = chatroom_doc.to_dict().get("messages", [])
+        else:
+            history = []
+
         history_message = json.dumps({
             "type": "chatroom_history",
             "chatroom": chatroom,
             "history": history
         })
         await websocket.send(history_message)
+    except Exception as e:
+        print(f"Error fetching chatroom history from Firestore: {e}")
 
 async def handler(websocket):
     try:
@@ -112,14 +125,17 @@ async def handler(websocket):
                         "timestamp": message.get("timestamp", None) or datetime.now().isoformat()
                     }
                     if not formatted_message["message"]:  # Skip broadcasting if the message is empty
-                        print(f"Skipping empty message from {username} in {chatroom}")
+                        # print(f"Skipping empty message from {username} in {chatroom}")
                         continue
                     json_data = json.dumps(formatted_message)
                     if "_" in chatroom:  # Flag for DM channel
+                        print(f"Broadcasting DM message in {chatroom} from {username}: {formatted_message['message']}")
                         await send_to_dm_channel(chatroom, json_data)
                     else:
-                        await broadcast_to_chatroom(chatroom, json_data)
-                    print(f"Broadcasting message in {chatroom} from {username}: {formatted_message['message']}")
+                        if chatroom:  # Only send if chatroom is not None or undefined
+                            await broadcast_to_chatroom(chatroom, json_data)
+                            print(f"Broadcasting message in {chatroom} from {username}: {formatted_message['message']}")
+                    
             except json.JSONDecodeError:
                 print("Received invalid JSON")
     except websockets.exceptions.ConnectionClosed:
@@ -145,24 +161,24 @@ async def handler(websocket):
 
 async def broadcast_online_users():
     """Broadcast the list of all online users to all connected clients."""
-    online_users = [data["username"] for data in clients.values() if data["username"]]  # Filter out None or invalid usernames
+    online_users = list(set(data["username"] for data in clients.values() if data["username"]))  # Remove duplicates
     message = json.dumps({"type": "online_users", "users": online_users})
     await asyncio.gather(*[client.send(message) for client in clients])
 
 async def broadcast_to_chatroom(chatroom, message):
-    """Send a message to all clients in a specific chatroom and log it."""
+    """Send a message to all clients in a specific chatroom and log it to Firestore."""
     if chatroom in chatrooms:
-        if chatroom not in chatroom_logs:
-            chatroom_logs[chatroom] = []
-        chatroom_logs[chatroom].append(message)
+        try:
+            # Log the message to Firestore immediately
+            chatroom_ref = db.collection("chatrooms").document(chatroom)
+            chatroom_ref.set({
+                "messages": firestore.ArrayUnion([message])
+            }, merge=True)
 
-        # Ensure the chatroom property is included in the message
-        message_data = json.loads(message)
-        message_data["chatroom"] = chatroom
-        updated_message = json.dumps(message_data)
-
-        # Broadcast the message to all clients in the chatroom
-        await asyncio.gather(*[client.send(updated_message) for client in chatrooms[chatroom]])
+            # Broadcast the message to all clients in the chatroom
+            await asyncio.gather(*[client.send(message) for client in chatrooms[chatroom]])
+        except Exception as e:
+            print(f"Error logging message to Firestore: {e}")
 
 async def handle_file_upload(websocket, file_name, file_data, username, chatroom):
     """Handle file uploads sent as JSON with base64-encoded data."""
@@ -225,10 +241,14 @@ async def send_file(websocket, filename):
 
 async def send_to_dm_channel(dm_channel, message):
     """Send a message to both users in a DM channel and log it."""
-    # Log the message
-    if dm_channel not in chatroom_logs:
-        chatroom_logs[dm_channel] = []
-    chatroom_logs[dm_channel].append(message)
+    # Log the message to Firestore immediately
+    try:
+        chatroom_ref = db.collection("chatrooms").document(dm_channel)
+        chatroom_ref.set({
+            "messages": firestore.ArrayUnion([message])
+        }, merge=True)
+    except Exception as e:
+        print(f"Error logging DM message to Firestore: {e}")
 
     # Ensure the chatroom property is included in the message
     message_data = json.loads(message)
@@ -242,16 +262,14 @@ async def send_to_dm_channel(dm_channel, message):
 
 async def main():
     try:
-        async with websockets.serve(handler, "0.0.0.0", 8765):
+        async with websockets.serve(handler, "0.0.0.0", 8000):
             print("WebSocket Server is running on ws://0.0.0.0:8765")
             await asyncio.Future()
     except KeyboardInterrupt:
         print("Server shutting down...")
-        save_logs()
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Server shutting down...")
-        save_logs()
