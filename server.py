@@ -5,6 +5,9 @@ import os
 from datetime import datetime
 import firebase_admin
 from firebase_admin import credentials, firestore
+import requests
+import threading
+import time
 
 clients = {}
 chatrooms = {"general": set()}  # Dictionary to store chatrooms and their clients
@@ -270,8 +273,22 @@ async def send_to_dm_channel(dm_channel, message):
         if data["username"] in users_in_channel:
             await client.send(updated_message)
 
+def send_heartbeat():
+    PUSH_URL = "https://uptime-kuma-production-4845.up.railway.app/api/push/H6ljqOI2BR?status=up&msg=OK&ping="
+    while True:
+        try:
+            requests.get(PUSH_URL)
+            print("Heartbeat sent to Uptime Kuma")
+        except Exception as e:
+            print("Failed to send heartbeat:", e)
+        time.sleep(60)
+
 async def main():
     try:
+        # Start the heartbeat thread
+        heartbeat_thread = threading.Thread(target=send_heartbeat, daemon=True)
+        heartbeat_thread.start()
+        
         async with websockets.serve(handler, "0.0.0.0", 8765):
             print("WebSocket Server is running on ws://0.0.0.0:8765")
             await asyncio.Future()
