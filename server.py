@@ -56,6 +56,17 @@ async def send_chatroom_history(websocket, chatroom):
     except Exception as e:
         print(f"Error fetching chatroom history from Firestore: {e}")
 
+async def broadcast_typing_status(username, chatroom, is_typing):
+    """Broadcast typing status to all clients in a chatroom."""
+    message = json.dumps({
+        "type": "typing_status",
+        "username": username,
+        "chatroom": chatroom,
+        "is_typing": is_typing
+    })
+    if chatroom in chatrooms:
+        await asyncio.gather(*[client.send(message) for client in chatrooms[chatroom]])
+
 async def handler(websocket):
     try:
         initial_message = await websocket.recv()
@@ -130,6 +141,13 @@ async def handler(websocket):
                     await handle_file_upload(websocket, file_name, file_data, username, chatroom)                    
                 elif type == "request_file":
                     await send_file(websocket, message.get("fileName"))
+                elif type == "typing_status":
+                    await broadcast_typing_status(
+                        username,
+                        message.get("chatroom", chatroom),
+                        message.get("is_typing", False)
+                    )
+                    continue
                 else:
                     formatted_message = {
                         "sender": username,
