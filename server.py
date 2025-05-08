@@ -67,6 +67,12 @@ async def broadcast_typing_status(username, chatroom, is_typing):
     if chatroom in chatrooms:
         await asyncio.gather(*[client.send(message) for client in chatrooms[chatroom]])
 
+async def send_online_users_to_client(websocket):
+    """Send the list of online users to a specific client."""
+    online_users = list(set(data["username"] for data in clients.values() if data["username"]))
+    message = json.dumps({"type": "online_users", "users": online_users})
+    await websocket.send(message)
+
 async def handler(websocket):
     try:
         initial_message = await websocket.recv()
@@ -84,15 +90,8 @@ async def handler(websocket):
         # Send chatroom history to the user
         await send_chatroom_history(websocket, chatroom)
 
-        await broadcast_online_users()
-
-        # join_message = json.dumps({
-        #     "sender": "System",
-        #     "chatroom": chatroom,
-        #     "message": f"{username} has joined {chatroom}",
-        #     "timestamp": datetime.now().isoformat()
-        # })
-        # await broadcast_to_chatroom(chatroom, join_message)
+        # Send online users only to the newly connected client
+        await send_online_users_to_client(websocket)
 
         async for raw_message in websocket:
             try:
@@ -188,13 +187,6 @@ async def handler(websocket):
             # else:
             #     await broadcast_to_chatroom(chatroom, leave_message)
             print(f"User {username} disconnected from {chatroom}")
-            await broadcast_online_users()
-
-async def broadcast_online_users():
-    """Broadcast the list of all online users to all connected clients."""
-    online_users = list(set(data["username"] for data in clients.values() if data["username"]))  # Remove duplicates
-    message = json.dumps({"type": "online_users", "users": online_users})
-    await asyncio.gather(*[client.send(message) for client in clients])
 
 async def broadcast_to_chatroom(chatroom, message):
     """Send a message to all clients in a specific chatroom and log it to Firestore."""
