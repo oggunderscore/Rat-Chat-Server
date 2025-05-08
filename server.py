@@ -8,6 +8,7 @@ from firebase_admin import credentials, firestore
 import requests
 import threading
 import time
+import base64
 
 clients = {}
 chatrooms = {"general": set()}  # Dictionary to store chatrooms and their clients
@@ -17,6 +18,9 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 LOG_DIR = "logs"
 os.makedirs(LOG_DIR, exist_ok=True)
+
+# Add file upload tracking
+file_chunks = {}  # Store chunks during upload
 
 # Initialize Firebase Admin SDK
 cred_path = os.getenv("FIREBASE_ADMIN_CREDS_PATH")
@@ -72,6 +76,82 @@ async def send_online_users_to_client(websocket):
     online_users = list(set(data["username"] for data in clients.values() if data["username"]))
     message = json.dumps({"type": "online_users", "users": online_users})
     await websocket.send(message)
+
+async def handle_file_chunk(websocket, message, username, chatroom):
+    """Handle incoming file chunks and reassemble them."""
+    file_id = message.get("fileId")
+    if not file_id:
+        return
+        
+    if file_id not in file_chunks:
+        file_chunks[file_id] = {
+            "chunks": {},
+            "filename": message.get("fileName"),
+            "total_size": message.get("totalSize"),
+            "received_size": 0
+        }
+    
+    chunk_data = message.get("chunk")
+    offset = message.get("offset", 0)
+    is_last_chunk = message.get("isLastChunk", False)
+    
+    try:
+        file_chunks[file_id]["chunks"][offset] = chunk_data
+        file_chunks[file_id]["received_size"] += len(chunk_data)
+        
+        if is_last_chunk:
+            # Reassemble file
+            sorted_chunks = sorted(file_chunks[file_id]["chunks"].items())
+            complete_file = "".join(chunk for _, chunk in sorted_chunks)
+            
+            # Process the complete file
+            await handle_complete_file(
+                websocket, 
+                file_chunks[file_id]["filename"],
+                complete_file,
+                username,
+                chatroom
+            )
+            
+            # Cleanup
+            del file_chunks[file_id]
+            
+            await websocket.send(json.dumps({
+                "type": "file_upload_status",
+                "status": "success",
+                "fileId": file_id
+            }))
+    except Exception as e:
+        print(f"Error handling file chunk: {e}")
+        await websocket.send(json.dumps({
+            "type": "file_upload_status",
+            "status": "error",
+            "message": "Error processing file chunk",
+            "fileId": file_id
+        }))
+
+async def handle_complete_file(websocket, filename, file_data, username, chatroom):
+    """Process a complete uploaded file."""
+    try:
+        # Save the file
+        file_path = os.path.join(UPLOAD_DIR, filename)
+        with open(file_path, "wb") as f:
+            f.write(base64.b64decode(file_data))
+            
+        # Notify chatroom about the upload
+        response = json.dumps({
+            "type": "file_uploaded",
+            "chatroom": chatroom,
+            "sender": username,
+            "filename": filename,
+            "message": f"{username} uploaded {filename}",
+            "timestamp": datetime.now().isoformat()
+        })
+        await broadcast_to_chatroom(chatroom, response)
+        
+    except Exception as e:
+        print(f"Error saving file: {e}")
+        raise
 
 async def handler(websocket):
     try:
@@ -138,6 +218,9 @@ async def handler(websocket):
                     # print(file_name)
                     # print(file_data)
                     await handle_file_upload(websocket, file_name, file_data, username, chatroom)                    
+                elif type == "upload_file_chunk":
+                    await handle_file_chunk(websocket, message, username, chatroom)
+                    continue
                 elif type == "request_file":
                     await send_file(websocket, message.get("fileName"))
                 elif type == "typing_status":
@@ -213,7 +296,6 @@ async def handle_file_upload(websocket, file_name, file_data, username, chatroom
             await websocket.send(json.dumps({"status": "error", "message": "Invalid file upload data"}))
             return
 
-        import base64
         decoded_file_data = base64.b64decode(file_data)
         file_path = os.path.join(UPLOAD_DIR, file_name)
 
@@ -248,7 +330,6 @@ async def send_file(websocket, filename):
         with open(file_path, "rb") as f:
             file_data = f.read()
 
-        import base64
         encoded_file_data = base64.b64encode(file_data).decode("utf-8")
 
         response = json.dumps({
