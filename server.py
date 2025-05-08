@@ -104,13 +104,14 @@ async def handle_file_chunk(websocket, message, username, chatroom):
             sorted_chunks = sorted(file_chunks[file_id]["chunks"].items())
             complete_file = "".join(chunk for _, chunk in sorted_chunks)
             
-            # Process the complete file
+            # Process the complete file with the encrypted upload message
             await handle_complete_file(
                 websocket, 
                 file_chunks[file_id]["filename"],
                 complete_file,
                 username,
-                chatroom
+                chatroom,
+                message.get("uploadMessage")  # Pass the encrypted message
             )
             
             # Cleanup
@@ -130,7 +131,7 @@ async def handle_file_chunk(websocket, message, username, chatroom):
             "fileId": file_id
         }))
 
-async def handle_complete_file(websocket, filename, file_data, username, chatroom):
+async def handle_complete_file(websocket, filename, file_data, username, chatroom, upload_message=None):
     """Process a complete uploaded file."""
     try:
         # Save the file
@@ -138,13 +139,13 @@ async def handle_complete_file(websocket, filename, file_data, username, chatroo
         with open(file_path, "wb") as f:
             f.write(base64.b64decode(file_data))
             
-        # Notify chatroom about the upload
+        # Use the encrypted upload message if provided
         response = json.dumps({
             "type": "file_uploaded",
             "chatroom": chatroom,
             "sender": username,
             "filename": filename,
-            "message": f"{username} uploaded {filename}",
+            "message": upload_message,  # Use the encrypted message
             "timestamp": datetime.now().isoformat()
         })
         await broadcast_to_chatroom(chatroom, response)
