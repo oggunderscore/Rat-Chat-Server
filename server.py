@@ -340,6 +340,13 @@ async def handler(websocket):
         # Send online users only to the newly connected client
         await send_online_users_to_client(websocket)
 
+        # Broadcast updated online users to all clients
+        online_users_message = json.dumps({
+            "type": "online_users",
+            "users": list(set(data["username"] for data in clients.values() if data["username"]))
+        })
+        await asyncio.gather(*[client.send(online_users_message) for client in clients])
+
         async for raw_message in websocket:
             try:
                 message = json.loads(raw_message)
