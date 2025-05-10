@@ -31,6 +31,19 @@ firebase_admin.initialize_app(cred)
 db = firestore.client()
 print("Firebase Admin SDK initialized. Path: ", cred_path)
 
+# Ensure the 'chatrooms' collection is initialized
+def initialize_chatrooms():
+    try:
+        chatrooms_ref = db.collection("chatrooms").stream()
+        chatroom_names = [doc.id for doc in chatrooms_ref]
+        if "general" not in chatroom_names:
+            db.collection("chatrooms").document("general").set({"messages": [], "users": []})
+            print("Initialized 'general' chatroom in Firestore.")
+    except Exception as e:
+        print(f"Error initializing chatrooms: {e}")
+
+initialize_chatrooms()
+
 # Delete all log files on startup
 for log_file in os.listdir(LOG_DIR):
     log_file_path = os.path.join(LOG_DIR, log_file)
@@ -211,6 +224,7 @@ async def broadcast_channel_list():
                 "name": channel,
                 "users": list(online_users) if channel == "general" else list(
                     db.collection("chatrooms").document(channel).get().to_dict().get("users", [])
+                    if db.collection("chatrooms").document(channel).get().exists else []
                 )
             }
             for channel in chatrooms.keys()
@@ -297,6 +311,7 @@ async def handle_ping(websocket, username):
                     "name": channel,
                     "users": list(online_users) if channel == "general" else list(
                         db.collection("chatrooms").document(channel).get().to_dict().get("users", [])
+                        if db.collection("chatrooms").document(channel).get().exists else []
                     )
                 }
                 for channel in chatrooms.keys()
