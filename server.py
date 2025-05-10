@@ -201,6 +201,110 @@ async def handle_complete_file(websocket, filename, file_data, username, chatroo
         print(f"Error saving file: {e}")
         raise
 
+async def broadcast_channel_list():
+    """Broadcast the updated list of channels and their permitted users to all connected clients."""
+    online_users = {data["username"] for data in clients.values() if data["username"]}
+    channel_list_message = json.dumps({
+        "type": "channel_list",
+        "channels": [
+            {
+                "name": channel,
+                "users": list(online_users) if channel == "general" else list(
+                    db.collection("chatrooms").document(channel).get().to_dict().get("users", [])
+                )
+            }
+            for channel in chatrooms.keys()
+        ]
+    })
+    await asyncio.gather(*[client.send(channel_list_message) for client in clients])
+
+async def handle_create_channel(websocket, channel_name, creator):
+    """Handle the creation of a new channel."""
+    if not channel_name or channel_name in chatrooms:
+        await websocket.send(json.dumps({"status": "error", "message": "Channel already exists or invalid name"}))
+        return
+
+    chatrooms[channel_name] = set()
+    chatroom_ref = db.collection("chatrooms").document(channel_name)
+    chatroom_ref.set({"messages": [], "users": [creator]})  # Initialize with creator
+    print(f"Channel #{channel_name} created by {creator}")
+    print(chatrooms)
+
+    await websocket.send(json.dumps({"status": "success", "message": f"Channel #{channel_name} created"}))
+    await broadcast_channel_list()  # Notify all clients about the new channel
+
+async def handle_add_user_to_channel(websocket, username, chatroom):
+    """Add a user to a channel."""
+    if chatroom not in chatrooms:
+        await websocket.send(json.dumps({"status": "error", "message": "Channel does not exist"}))
+        return
+
+    chatroom_ref = db.collection("chatrooms").document(chatroom)
+    chatroom_doc = chatroom_ref.get()
+    if chatroom_doc.exists:
+        users = chatroom_doc.to_dict().get("users", [])
+        if username not in users:
+            users.append(username)
+            chatroom_ref.update({"users": users})
+            print(f"User {username} added to #{chatroom}")
+            await websocket.send(json.dumps({"status": "success", "message": f"{username} added to #{chatroom}"}))
+            await broadcast_channel_list()  # Update all clients with the new user list
+        else:
+            await websocket.send(json.dumps({"status": "error", "message": "User already in channel"}))
+    else:
+        await websocket.send(json.dumps({"status": "error", "message": "Channel does not exist"}))
+
+async def handle_remove_user_from_channel(websocket, username, chatroom):
+    """Remove a user from a channel."""
+    if chatroom not in chatrooms:
+        await websocket.send(json.dumps({"status": "error", "message": "Channel does not exist"}))
+        return
+
+    chatroom_ref = db.collection("chatrooms").document(chatroom)
+    chatroom_doc = chatroom_ref.get()
+    if chatroom_doc.exists:
+        users = chatroom_doc.to_dict().get("users", [])
+        if username in users:
+            users.remove(username)
+            chatroom_ref.update({"users": users})
+            print(f"User {username} removed from #{chatroom}")
+            await websocket.send(json.dumps({"status": "success", "message": f"{username} removed from #{chatroom}"}))
+            await broadcast_channel_list()  # Update all clients with the new user list
+        else:
+            await websocket.send(json.dumps({"status": "error", "message": "User not in channel"}))
+    else:
+        await websocket.send(json.dumps({"status": "error", "message": "Channel does not exist"}))
+
+async def handle_ping(websocket, username):
+    """Handle ping requests and send pong response along with online users and channels."""
+    try:
+        print(f"Ping received from {username}")
+        await websocket.send(json.dumps({
+            "type": "pong",
+            "username": username
+        }))
+        print(f"Pong sent to {username}")
+
+        # Send online users
+        await send_online_users_to_client(websocket)
+
+        # Send available channels with permitted users
+        online_users = {data["username"] for data in clients.values() if data["username"]}
+        await websocket.send(json.dumps({
+            "type": "channel_list",
+            "channels": [
+                {
+                    "name": channel,
+                    "users": list(online_users) if channel == "general" else list(
+                        db.collection("chatrooms").document(channel).get().to_dict().get("users", [])
+                    )
+                }
+                for channel in chatrooms.keys()
+            ]
+        }))
+    except Exception as e:
+        print(f"Error handling ping: {e}")
+
 async def handler(websocket):
     try:
         initial_message = await websocket.recv()
@@ -228,13 +332,7 @@ async def handler(websocket):
                 
                 print(f"Message: {message} | Type: {type}")
                 if type == "ping":
-                    username = message.get("username", "Unknown")
-                    print(f"Ping received from {username}")
-                    await websocket.send(json.dumps({
-                        "type": "pong",
-                        "username": username
-                    }))
-                    print(f"Pong sent to {username}")
+                    await handle_ping(websocket, message.get("username", "Unknown"))
                     continue
 
                 if type == "switch_chatroom":
@@ -246,9 +344,6 @@ async def handler(websocket):
                     old_chatroom = clients[websocket]["chatroom"]
                     if old_chatroom != new_chatroom:
                         chatrooms[old_chatroom].remove(websocket)
-                        if not chatrooms[old_chatroom]:
-                            del chatrooms[old_chatroom]  # Clean up empty chatrooms
-
                         if new_chatroom not in chatrooms:
                             chatrooms[new_chatroom] = set()
                         chatrooms[new_chatroom].add(websocket)
@@ -276,6 +371,32 @@ async def handler(websocket):
                         message.get("is_typing", False)
                     )
                     continue
+                elif type == "get_channels":
+                    await websocket.send(json.dumps({
+                        "type": "channel_list",
+                        "channels": [
+                            {"name": channel, "users": list(db.collection("chatrooms").document(channel).get().to_dict().get("users", []))}
+                            for channel in chatrooms.keys()
+                        ]
+                    }))
+                elif type == "create_channel":
+                    await handle_create_channel(
+                        websocket,
+                        message.get("channelName"),
+                        message.get("creator")
+                    )
+                elif type == "add_user_to_channel":
+                    await handle_add_user_to_channel(
+                        websocket,
+                        message.get("username"),
+                        message.get("chatroom")
+                    )
+                elif type == "remove_user_from_channel":
+                    await handle_remove_user_from_channel(
+                        websocket,
+                        message.get("username"),
+                        message.get("chatroom")
+                    )
                 else:
                     formatted_message = {
                         "sender": username,
