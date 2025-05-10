@@ -52,6 +52,17 @@ for log_file in os.listdir(LOG_DIR):
 
 chatroom_logs = {}  # Dictionary to store logs for each chatroom
 
+def ensure_chatroom_exists(chatroom):
+    """Ensure a chatroom exists in Firestore. If not, initialize it."""
+    try:
+        chatroom_ref = db.collection("chatrooms").document(chatroom)
+        chatroom_doc = chatroom_ref.get()
+        if not chatroom_doc.exists:
+            chatroom_ref.set({"messages": [], "users": []})
+            print(f"Chatroom '{chatroom}' initialized in Firestore.")
+    except Exception as e:
+        print(f"Error ensuring chatroom '{chatroom}' exists: {e}")
+
 async def send_chatroom_history(websocket, chatroom):
     """Send the chatroom's message history to the user from Firestore."""
     try:
@@ -327,6 +338,9 @@ async def handler(websocket):
         username = initial_data.get("username", "Unknown")
         chatroom = initial_data.get("chatroom", "general")
 
+        # Ensure the chatroom exists in Firestore
+        ensure_chatroom_exists(chatroom)
+
         if chatroom not in chatrooms:
             chatrooms[chatroom] = set()
         chatrooms[chatroom].add(websocket)
@@ -361,6 +375,9 @@ async def handler(websocket):
                     new_chatroom = message.get("chatroom")
                     if not new_chatroom:
                         continue
+
+                    # Ensure the new chatroom exists in Firestore
+                    ensure_chatroom_exists(new_chatroom)
 
                     # Update the client's chatroom
                     old_chatroom = clients[websocket]["chatroom"]
