@@ -442,7 +442,8 @@ async def handler(websocket):
                         "chatroom": chatroom,  
                         "message": message.get("message", "").strip(),
                         "timestamp": message.get("timestamp", None) or datetime.now().isoformat(),
-                        "isEncrypted": message.get("isEncrypted", False)  # Default to False
+                        "isEncrypted": message.get("isEncrypted", False),  # Default to False
+                        "hash": message.get("hash", None)  # Optional hash field
                     }
                     if not formatted_message["message"]:  # Skip broadcasting if the message is empty
                         continue
