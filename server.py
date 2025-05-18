@@ -442,7 +442,8 @@ async def handler(websocket):
                         "chatroom": chatroom,  
                         "message": message.get("message", "").strip(),
                         "timestamp": message.get("timestamp", None) or datetime.now().isoformat(),
-                        "isEncrypted": message.get("isEncrypted", False)  # Default to False
+                        "isEncrypted": message.get("isEncrypted", False),  # Default to False
+                        "hash": message.get("hash", None)  # Optional hash field
                     }
                     if not formatted_message["message"]:  # Skip broadcasting if the message is empty
                         continue
@@ -557,7 +558,7 @@ async def main():
         heartbeat_thread = threading.Thread(target=send_heartbeat, daemon=True)
         heartbeat_thread.start()
         
-        async with websockets.serve(handler, "0.0.0.0", 8765):
+        async with websockets.serve(handler, "0.0.0.0", 8766):
             print("WebSocket Server is running on ws://0.0.0.0:8765")
             await asyncio.Future()
     except KeyboardInterrupt:
