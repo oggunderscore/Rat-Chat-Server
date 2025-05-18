@@ -558,7 +558,7 @@ async def main():
         heartbeat_thread = threading.Thread(target=send_heartbeat, daemon=True)
         heartbeat_thread.start()
         
-        async with websockets.serve(handler, "0.0.0.0", 87656):
+        async with websockets.serve(handler, "0.0.0.0", 8766):
             print("WebSocket Server is running on ws://0.0.0.0:8765")
             await asyncio.Future()
     except KeyboardInterrupt:
